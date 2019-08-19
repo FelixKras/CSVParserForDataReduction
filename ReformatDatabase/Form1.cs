@@ -33,24 +33,269 @@ namespace ReformatDatabase
             if (ofd.ShowDialog() == DialogResult.OK)
             {
                 fpath = ofd.FileName;
-                ParseAndReformat(fpath);
+                if (new FileInfo(fpath).Extension.Contains(".json"))
+                {
+                    ParseAndReformatJSON(fpath);
+                }
+                else if (new FileInfo(fpath).Extension.Contains(".csv"))
+                {
+                    ParseAndReformatCSV(fpath);
+                }
             }
         }
 
+        private void ParseAndReformatCSV(string csvpath)
+        {
+            string[] allLines = File.ReadAllLines(csvpath);
+            string[] Headers = allLines[0].Split(new char[] { ',' });
+            List<FinalData> lstFinalData = new List<FinalData>();
+            List<List<string>> lstParsedLines = new List<List<string>>();
+            for (int ii = 1; ii < allLines.Length; ii++)
+            {
+                bool bRes = true;
+                FinalData fd = new FinalData();
+                string sInputStr = allLines[ii];
+                lstParsedLines.Add(new List<string>());
+                string[] s1splitted = sInputStr.Split(',');
 
-        private void ParseAndReformat(string fpath)
+                if (s1splitted.Length == Headers.Length)
+                {
+                    for (int jj = 0; jj < s1splitted.Length; jj++)
+                    {
+                        lstParsedLines[ii - 1].Add(s1splitted[jj]);
+                    }
+                }
+                else if (s1splitted.Length > Headers.Length)
+                {
+                    for (int jj = 0; jj < s1splitted.Length; jj++)
+                    {
+                        if (s1splitted[jj].StartsWith("\"") && !s1splitted[jj].EndsWith("\""))
+                        {
+                            for (int kk = jj + 1; kk < s1splitted.Length; kk++)
+                            {
+                                if (s1splitted[kk].EndsWith("\""))
+                                {
+                                    lstParsedLines[ii - 1].Add(s1splitted.MergeParts(jj, kk));
+                                    jj = kk;
+                                    break;
+                                }
+                            }
+                        }
+                        else
+                        {
+                            lstParsedLines[ii - 1].Add(s1splitted[jj]);
+                        }
+                    }
+                }
+                else
+                {
+
+                }
+
+                bRes &= ParseAndCleanDate(lstParsedLines[ii - 1][0], fd);
+                bRes &= ParseAndCleanTime(lstParsedLines[ii - 1][1], fd);
+                fd.Location = lstParsedLines[ii - 1][2];
+                fd.Operator = lstParsedLines[ii - 1][3];
+                fd.Flight_no = lstParsedLines[ii - 1][4];
+                fd.Route = lstParsedLines[ii - 1][5];
+                fd.AC_type = lstParsedLines[ii - 1][6];
+                fd.Registration = lstParsedLines[ii - 1][7];
+                fd.cn_Ln = lstParsedLines[ii - 1][8];
+                fd.Summary = lstParsedLines[ii - 1][12];
+                ParseFatalities(fd, lstParsedLines[ii - 1][10], lstParsedLines[ii - 1][11]);
+                ParseAboard(fd, lstParsedLines[ii - 1][9]);
+                lstFinalData.Add(fd);
+            }
+
+            File.WriteAllText(new FileInfo(fpath).DirectoryName + "\\NewCSV.csv", lstFinalData.ConvertToString());
+        }
+
+        private bool ParseAndCleanTime(string sInputStr, FinalData fd)
+        {
+            DateTime dtTime = new DateTime();
+            bool bRes = false;
+            //Regex rgxTime = new Regex("^\\d{2}:\\d{2}\\w?|(?<=c\\s)\\d{2}:\\d{2}|^[\\?]|^\\d{4}");
+            //Match timematch = rgxTime.Match(sInputStr);
+            string result = String.Empty;
+
+            result = sInputStr.Replace("c", "");
+            result = result.Replace("Z", "");
+            result = result.Replace(" ", "");
+            result = result.Replace(".", "");
+            result = result.Replace(";", "");
+            if (result.Contains("?"))
+            {
+                result = "00:01:11";
+                bRes = DateTime.TryParseExact(result, "HH:mm:ss",
+                    CultureInfo.InvariantCulture, DateTimeStyles.None, out dtTime);
+            }
+            else if (!result.Contains(":"))
+            {
+                result = result.Insert(2, ":");
+                bRes = DateTime.TryParseExact(result, "HH:mm",
+                    CultureInfo.InvariantCulture, DateTimeStyles.None, out dtTime);
+            }
+            else
+            {
+                bRes = DateTime.TryParseExact(result, "HH:mm",
+                    CultureInfo.InvariantCulture, DateTimeStyles.None, out dtTime);
+            }
+            if (bRes)
+            {
+                fd.DateAndTime += new TimeSpan(dtTime.Hour, dtTime.Minute, 0);
+            }
+            else
+            {
+
+            }
+
+
+
+
+            return bRes;
+        }
+        private bool ParseAndCleanDate(string sInputStr, FinalData fd)
+        {
+            //Regex rgxDate = new Regex("\".*?\"");
+            //Match datematch = rgxDate.Match(sInputStr);
+            DateTime dtDate = new DateTime();
+            bool bRes = DateTime.TryParseExact(sInputStr.Replace("\"", ""), "MMMM dd yyyy",
+                    CultureInfo.InvariantCulture, DateTimeStyles.None, out dtDate);
+            if (bRes)
+            {
+                fd.DateAndTime = dtDate;
+            }
+            else
+            {
+                bRes = false;
+            }
+
+            return bRes;
+        }
+
+
+
+        private bool ParseAndCleanFlightNum(string sInputStr, FinalData fd)
+        {
+            bool bRes = true;
+            Regex rgxFlightNum = new Regex("^\\w.*?|\\?(?=,)");
+            Match FlightNummatch = rgxFlightNum.Match(sInputStr);
+
+            if (FlightNummatch.Value.Length > 0)
+            {
+                if (!FlightNummatch.Value.Contains("?"))
+                {
+                    fd.Operator = FlightNummatch.Value;
+                }
+                else
+                {
+                    fd.Operator = "NA";
+                }
+                sInputStr = sInputStr.Substring(FlightNummatch.Index + FlightNummatch.Length + 1);
+            }
+            else
+            {
+                bRes = false;
+            }
+
+            return false;
+        }
+        private bool ParseAndCleanOperator(string sInputStr, FinalData fd)
+        {
+            bool bRes = true;
+            Regex rgxOperNoQuotes = new Regex("^.*?(?=,)");
+            Regex rgxOperQuotes = new Regex("(?<=^\").*?(?=\")");
+
+            Match opermatchNoQuotes = rgxOperNoQuotes.Match(sInputStr);
+            Match opermatchQuotes = rgxOperQuotes.Match(sInputStr);
+            if (opermatchQuotes.Length > opermatchNoQuotes.Length && opermatchQuotes.Length > 0)
+            {
+                if (!opermatchQuotes.Value.Contains("?"))
+                {
+                    fd.Operator = opermatchQuotes.Value;
+                }
+                else
+                {
+                    fd.Operator = "NA";
+                }
+                sInputStr = sInputStr.Substring(opermatchQuotes.Index + opermatchQuotes.Length + 2);
+            }
+            else if (opermatchNoQuotes.Length > opermatchQuotes.Length && opermatchNoQuotes.Length > 0)
+            {
+                if (!opermatchNoQuotes.Value.Contains("?"))
+                {
+                    fd.Operator = opermatchNoQuotes.Value;
+                }
+                else
+                {
+                    fd.Operator = "NA";
+                }
+                sInputStr = sInputStr.Substring(opermatchNoQuotes.Index + opermatchNoQuotes.Length + 1);
+            }
+            else
+            {
+                bRes = false;
+            }
+
+
+            return bRes;
+        }
+        private bool ParseAndCleanPlace(string sInputStr, FinalData fd)
+        {
+            bool bRes = true;
+            Regex rgxPlaceQuotes = new Regex("(?<=^\").*?(?=\",)");
+            Regex rgxPlaceNoQuotes = new Regex("^\\w.+?(?=,)");
+            Regex rgxQuestion = new Regex("^\\?,");
+            Match placematch = rgxPlaceQuotes.Match(sInputStr);
+
+            if (placematch.Value.Length > 0)
+            {
+                fd.Location = placematch.Value;
+                sInputStr = sInputStr.Substring(placematch.Index + placematch.Length + 2);
+            }
+            else if ((placematch = rgxPlaceNoQuotes.Match(sInputStr)).Value.Length > 0)
+            {
+                fd.Location = placematch.Value;
+                sInputStr = sInputStr.Substring(placematch.Index + placematch.Length + 1);
+
+            }
+            else if ((placematch = rgxQuestion.Match(sInputStr)).Value.Length > 0)
+            {
+                fd.Location = "NA";
+                sInputStr = sInputStr.Substring(placematch.Index + placematch.Length);
+            }
+            else
+            {
+
+                bRes = false;
+            }
+            return bRes;
+        }
+
+
+
+        private void ParseAndReformatJSON(string jsnpath)
         {
 
-            string allLines = File.ReadAllText(fpath);
+            string allLines = File.ReadAllText(jsnpath);
             List<DataHolder> lstDataJson = JsonConvert.DeserializeObject<List<DataHolder>>(allLines);
             List<FinalData> lstFinalData = new List<FinalData>();
             for (int ii = 0; ii < lstDataJson.Count; ii++)
             {
                 FinalData fd = new FinalData();
                 fd.DateAndTime = ParseDate(lstDataJson[ii].Date, lstDataJson[ii].Time);
-                ParseFatalities(fd, lstDataJson[ii].Fatalities, lstDataJson[ii].Ground);
+                try
+                {
+                    ParseFatalities(fd, lstDataJson[ii].Fatalities, lstDataJson[ii].Ground);
+                }
+                catch (Exception e)
+                {
+                    Console.WriteLine(e);
+                    throw;
+                }
+
                 ParseAboard(fd, lstDataJson[ii].Aboard);
-                
+
 
                 fd.Location = lstDataJson[ii].Location;
                 fd.Operator = lstDataJson[ii].Operator;
@@ -72,7 +317,6 @@ namespace ReformatDatabase
             File.WriteAllText(new FileInfo(fpath).DirectoryName + "\\NewJson.json", NewJson);
             File.WriteAllText(new FileInfo(fpath).DirectoryName + "\\NewCSV.csv", lstFinalData.ConvertToString());
         }
-
         private void ParseFatalities(FinalData fd, string airFatalities, string grndFatalities)
         {
             Regex rgxCrew = new Regex(@"(?<=crew:)\d*");
@@ -85,7 +329,7 @@ namespace ReformatDatabase
             MatchCollection matchAirTotal = rgxTotal.Matches(airFatalities);
             MatchCollection matchGrndTotal = rgxTotal.Matches(grndFatalities);
 
-            if (matchCrew.Count == 1&& matchCrew[0].Length>0 )
+            if (matchCrew.Count == 1 && matchCrew[0].Length > 0)
             {
                 fd.PlaneCrewFatalities = int.Parse(matchCrew[0].Value);
             }
@@ -110,7 +354,6 @@ namespace ReformatDatabase
                 fd.GroundFatalities = int.Parse(matchGrndTotal[0].Value);
             }
         }
-
         private void ParseAboard(FinalData fd, string aboard)
         {
             Regex rgxCrew = new Regex(@"(?<=crew:)\d*");
@@ -123,16 +366,24 @@ namespace ReformatDatabase
             Match matchTotal = rgxTotal.Match(aboard);
 
 
-            if (matchCrew.Length == 1)
+            if (matchCrew.Length > 0)
             {
                 fd.Crew = int.Parse(matchCrew.Value);
             }
-            if (matchPsngr.Length == 1)
+            if (matchPsngr.Length > 0)
             {
                 fd.Passengers = int.Parse(matchPsngr.Value);
             }
+            if (matchTotal.Length > 0)
+            {
+                fd.TotalAboard = int.Parse(matchTotal.Value);
+            }
 
-
+            if (fd.Passengers + fd.TotalAboard != fd.TotalAboard)
+            {
+                fd.TotalAboard =
+                    Math.Max(fd.Passengers + fd.Crew, fd.TotalAboard);
+            }
 
         }
         private DateTime ParseDate(string date, string time)
@@ -189,6 +440,7 @@ namespace ReformatDatabase
         public string cn_Ln;
         public int Passengers;
         public int Crew;
+        public int TotalAboard;
         public int PlaneCrewFatalities;
         public int PlanePsngrFatalities;
         public int PlaneTotalFatalities;
@@ -224,6 +476,7 @@ namespace ReformatDatabase
                      cn_Ln.Replace(',', '.').Replace('\'', ' ').Replace('"', ' ') + delim +
                      Passengers + delim +
                      Crew + delim +
+                     TotalAboard + delim +
                      PlaneCrewFatalities + delim +
                      PlanePsngrFatalities + delim +
                      PlaneTotalFatalities + delim +
@@ -238,18 +491,41 @@ namespace ReformatDatabase
         public static string ConvertToString(this List<FinalData> lstData)
         {
             StringBuilder sb = new StringBuilder(lstData.Count);
-            sb.Append("Date,Time,Location,Operator,FlightNum,Route,AC_Type,Registration,Cn_Ln,Passengers,Crew," +
-                      "Crew Fatalities,Passenger Fatalities,Total Fatalities,Ground Fatalities,Summary\r\n");
+            sb.Append("Date,Time,Location,Operator,FlightNum,Route,AC_Type,Registration,Cn_Ln,Passengers,Crew,TotalAboard" +
+                      ",Crew Fatalities,Passenger Fatalities,Total Fatalities,Ground Fatalities,Summary\r\n");
             for (int ii = 0; ii < lstData.Count; ii++)
             {
-                if (lstData[ii].AC_type.Contains("De Havilland"))
-                {
-
-                }
-                sb.Append(lstData[ii].ToString());
+               sb.Append(lstData[ii].ToString());
             }
 
             return sb.ToString();
+        }
+
+        public static string MergeParts(this string[] inputStr, int Start, int End)
+        {
+            string result = String.Empty;
+
+            for (int ii = Start; ii <= End; ii++)
+            {
+                if (ii>Start)
+                {
+                    if (!inputStr[ii].StartsWith(" "))
+                    {
+                        result += " " +inputStr[ii];
+                    }
+                    else
+                    {
+                        result += inputStr[ii];
+                    }
+                }
+                else
+                {
+                    result += inputStr[ii];
+                }
+                
+
+            }
+            return result;
         }
     }
 }
